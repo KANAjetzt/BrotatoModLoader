@@ -42,6 +42,12 @@ func mod_log(text:String)->void :
 	var date_time_string = str(date_time.day,'.',date_time.month,'.',date_time.year,' - ', date_time.hour,':',date_time.minute,':',date_time.second)
 	
 	var log_file = File.new()
+	
+	if(!log_file.file_exists(MOD_LOG_PATH)):
+		log_file.open(MOD_LOG_PATH, File.WRITE)
+		log_file.store_string("\n" + str(date_time_string,'   ', 'Created mod.log!'))
+		log_file.close()
+	
 	var _error = log_file.open(MOD_LOG_PATH, File.READ_WRITE)
 	if(_error):
 		print(_error)
