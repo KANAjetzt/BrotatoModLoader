@@ -41,6 +41,8 @@ func mod_log(text:String)->void :
 	var date_time = Time.get_datetime_dict_from_system()
 	var date_time_string = str(date_time.day,'.',date_time.month,'.',date_time.year,' - ', date_time.hour,':',date_time.minute,':',date_time.second)
 	
+	print(str(date_time_string,'   ', text))
+	
 	var log_file = File.new()
 	
 	if(!log_file.file_exists(MOD_LOG_PATH)):
@@ -144,6 +146,7 @@ func installScriptExtension(childScriptPath:String):
 
 
 func addTranslationsFromCSV(csvPath: String):
+	mod_log(str("ModLoader: adding translations from CSV -> ", csvPath))
 	var translationCsv = File.new()
 	translationCsv.open(csvPath, File.READ)
 	var TranslationParsedCsv = {}
@@ -172,7 +175,7 @@ func addTranslationsFromCSV(csvPath: String):
 	for translationObject in translations:
 		TranslationServer.add_translation(translationObject)
 	
-	ModLoader.mod_log(str("ModLoader: added translations from CSV -> ", csvPath))
+	mod_log(str("ModLoader: added translations from CSV -> ", csvPath))
 
 
 func appendNodeInScene(modifiedScene, nodeName:String = "", nodeParent = null, instancePath:String = "", isVisible:bool = true):
