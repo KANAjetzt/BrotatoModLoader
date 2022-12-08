@@ -109,7 +109,8 @@ func _initMods():
 	for packedScript in initScripts:
 		mod_log("ModLoader: Running %s" % packedScript.resource_path)
 		var scriptInstance = packedScript.new(self)
-		add_child(scriptInstance)
+		scriptInstance.name = packedScript.resource_path.split('/')[2]
+		add_child(scriptInstance, true)
 
 
 func _compareScriptPriority(a, b):
