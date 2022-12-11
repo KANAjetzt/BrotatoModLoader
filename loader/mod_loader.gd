@@ -109,7 +109,7 @@ func _initMods():
 	for packedScript in initScripts:
 		mod_log("ModLoader: Running %s" % packedScript.resource_path)
 		var scriptInstance = packedScript.new(self)
-		scriptInstance.name = packedScript.resource_path.split('/')[2]
+		scriptInstance.name = packedScript.resource_path.get_file()
 		add_child(scriptInstance, true)
 
 
@@ -145,6 +145,12 @@ func installScriptExtension(childScriptPath:String):
 	mod_log("ModLoader: Installing script extension: %s <- %s" % [parentScriptPath, childScriptPath])
 	childScript.take_over_path(parentScriptPath)
 
+
+func addTranslationFromResource(resourcePath: String):
+	mod_log("ModLoader: Adding Translation from Resource")
+	var translation_object = load(resourcePath)
+	TranslationServer.add_translation(translation_object)
+	mod_log("ModLoader: Added Translation from Resource")
 
 func addTranslationsFromCSV(csvPath: String):
 	mod_log(str("ModLoader: adding translations from CSV -> ", csvPath))
