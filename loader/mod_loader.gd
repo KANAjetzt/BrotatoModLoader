@@ -109,7 +109,7 @@ func _initMods():
 	for packedScript in initScripts:
 		mod_log("ModLoader: Running %s" % packedScript.resource_path)
 		var scriptInstance = packedScript.new(self)
-		scriptInstance.name = packedScript.resource_path.get_file()
+		scriptInstance.name = packedScript.resource_path.split('/')[2]
 		add_child(scriptInstance, true)
 
 
@@ -210,7 +210,6 @@ func saveScene(modifiedScene, scenePath:String):
 	var packed_scene = PackedScene.new()
 	packed_scene.pack(modifiedScene)
 	mod_log(str("ModLoader: packing scene -> ", packed_scene))
-	mod_log(str("ModLoader: scene childs -> ", packed_scene.instance().get_children()))
 	packed_scene.take_over_path(scenePath)
 	mod_log(str("ModLoader: saveScene - taking over path - new path -> ", packed_scene.resource_path))
 	_savedObjects.append(packed_scene)
