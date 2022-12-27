@@ -15,29 +15,65 @@
 
 extends Node
 
-var MOD_LOG_PATH = "user://mods.log"
-var areModsEnabled = false
+const MOD_LOG_PATH = "user://mods.log"
+const REQUIRED_MOD_FILES = ["modmain.gd", "_meta.json"]
+const REQUIRED_META_TAGS = [
+	"id", 
+	"name", 
+	"version", 
+	"compatible_game_version", 
+	"authors", 
+	"description",	
+]
+
+var mod_zip_file_paths = []
+
+var mod_data = {}
+var mod_load_order = []
+#	var missing_dependencies = {
+#		"mod_id": ["dep_mod_id_0", "dep_mod_id_2"]
+#	}
+var mod_missing_dependencies = {}
 
 func _init():
-	for arg in OS.get_cmdline_args():
-		if arg == "--enable-mods":
-			areModsEnabled = true
-
-	if !areModsEnabled && OS.has_feature("standalone"):
+	# if mods are not enabled - don't load mods
+	if(!_check_mods_enabled()):
 		return
 
-	mod_log("ModLoader: Loading mods...")
-	_loadMods()
-	mod_log("ModLoader: Done loading mods.")
+	_get_mod_zip_file_paths()
+	_unzip_mods()
 
-	mod_log("ModLoader: Initializing mods...")
-	_initMods()
-	mod_log("ModLoader: Done initializing mods.")
+	for mod_id in mod_data:
+		var mod = mod_data[mod_id]
+		
+		# verify files
+		_check_mod_files(mod_id)
+		if(!mod.is_loadable):
+			continue
+		
+		# load meta data into mod_data
+		_load_meta_data(mod_id)
+		if(!mod.is_loadable):
+			continue
+		
+	# run dependency check after loading meta_data
+	for mod_id in mod_data:
+		_check_dependencies(mod_id, mod_data[mod_id].meta_data.dependencies)
+	
+	# Sort mod_load_order by the importance score of the mod
+	_get_load_order()
+	
+	mod_log(str("ModLoader: mod_load_order -> ", JSON.print(mod_load_order, '   ')))
+
+	# Instance every mod and add it as a node to the Mod Loader
+	for mod in mod_load_order:
+		mod_log(str("ModLoader: Initializing -> ", mod.meta_data.id))
+		_init_mod(mod)
 
 
-var _modZipFiles = []
+	mod_log(str("ModLoader: mod_data: ", JSON.print(mod_data, '   ')))
 
-func mod_log(text:String)->void :
+func mod_log(text:String, pretty:bool = false)->void :
 	var date_time = Time.get_datetime_dict_from_system()
 	var date_time_string = str(date_time.day,'.',date_time.month,'.',date_time.year,' - ', date_time.hour,':',date_time.minute,':',date_time.second)
 	
@@ -55,78 +91,266 @@ func mod_log(text:String)->void :
 		print(_error)
 		return
 	log_file.seek_end()
-	log_file.store_string("\n" + str(date_time_string,'   ', text))
+	if(pretty):
+		log_file.store_string("\n" + str(date_time_string,'   ', JSON.print(text, " ")))
+	else:
+		log_file.store_string("\n" + str(date_time_string,'   ', text))
 	log_file.close()
 
-func _loadMods():
+func _check_mods_enabled() -> bool:
+	for arg in OS.get_cmdline_args():
+		if arg == "--enable-mods":
+			return true
+
+	return false
+
+func _get_mod_zip_file_paths():
+	# Path to the games mod folder
+	var game_mod_folder_path = _get_mod_folder_dir()
+
+	var dir = Directory.new()
+	if dir.open(game_mod_folder_path) != OK:
+		mod_log("ModLoader: Can't open mod folder %s." % game_mod_folder_path)
+		return
+	if dir.list_dir_begin() != OK:
+		mod_log("ModLoader: Can't read mod folder %s." % game_mod_folder_path)
+		return
+
+	# Get all zip folders inside the game mod folder
+	while true:
+		var mod_folder_name = dir.get_next()
+		if mod_folder_name == '':
+			break
+		if dir.current_is_dir():
+			continue
+		var mod_folder_path = game_mod_folder_path.plus_file(mod_folder_name)
+		var mod_folder_global_path = ProjectSettings.globalize_path(mod_folder_path)
+		if !ProjectSettings.load_resource_pack(mod_folder_global_path, true):
+			mod_log("ModLoader: %s failed to load." % mod_folder_name)
+			continue
+		mod_zip_file_paths.append(mod_folder_path)
+		mod_log("ModLoader: %s loaded." % mod_folder_name)
+	dir.list_dir_end()
+
+	mod_log(str("ModLoader: Zip File Paths: ", mod_zip_file_paths))
+
+func _unzip_mods():
+	# Unzip each mod zip file
+	for mod_zip_file_path in mod_zip_file_paths:
+		var gdunzip = load('res://vendor/gdunzip.gd').new()
+		gdunzip.load(mod_zip_file_path)
+
+		# The file name should be a valid mod id
+		var mod_id = _get_file_name(mod_zip_file_path, false, true)
+		
+		mod_data[mod_id] = {}
+		mod_data[mod_id].file_paths = []
+		mod_data[mod_id].required_files_path = {}
+		mod_data[mod_id].is_loadable = true
+		mod_data[mod_id].importance = 0
+		
+		# Get the mod file paths
+		for file in gdunzip.files:
+			if(file.get_file() != ''):
+				mod_data[mod_id].file_paths.append(file)
+	
+	mod_log("ModLoader: Unziped all Mods")
+
+# Make sure the required mod files are there
+func _check_mod_files(mod_id):
+	# Loop through each mod
+	var found_files =  []
+
+	# Get the file paths of the current mod
+	var mod = mod_data[mod_id]
+	var file_paths = mod.file_paths
+	
+	for file_path in file_paths:
+		var file_name = file_path.get_file().to_lower()
+
+		# Check if it is in the required_files array
+		if(REQUIRED_MOD_FILES.has(file_name)):
+			# Check if it is not in the root of the mod folder
+			if(!_check_file_is_in_root(file_path, file_name)):
+				mod_log(str("ModLoader: ERROR - ", mod_id, " required file ", file_name, " is not at the root of the mod folder."))
+				mod.is_loadable = false
+				# We can break the loop early if a required file is in the wrong location
+				break
+
+			# If the file is required add it to found files
+			found_files.append(file_name)
+			# Add a key to required files dict
+			mod.required_files_path[_get_file_name(file_path, true, true)] = file_path
+	
+	if(REQUIRED_MOD_FILES.size() == found_files.size()):
+		mod_log(str("ModLoader: ", mod_id, " all required Files found."))
+	else:
+		# Don't show this error if the "required file not in root" error is shown before
+		if(!mod.has("is_loadable") || mod.is_loadable):
+			# Flag mods with missing files so they don't get loaded later
+			mod.is_loadable = false
+			mod_log(str("ModLoader: ERROR - only found ", found_files, " but this files are required -> ", REQUIRED_MOD_FILES))
+
+# TODO: Make it possible to have required files in different locations - not just the root
+func _check_file_is_in_root(path, file_name):
+	var path_split = path.split("/")
+	
+	if(path_split[1].to_lower() == file_name):
+		return true
+	else:
+		return false
+
+# Load meta data into mod_data
+func _load_meta_data(mod_id):
+	mod_log(str("ModLoader: Loading meta_data for -> ", mod_id))
+	var mod = mod_data[mod_id]
+
+	# Load meta data file
+	var meta_path = str("res://",mod_id,"/_meta.json")
+	var meta_data = _get_json_as_dict(meta_path)
+
+	mod_log(str("ModLoader: loaded meta data -> ", meta_data))
+
+	# Check if the meta data has all required fields
+	var missing_fields = _check_meta_file(meta_data)
+	if(missing_fields.size() > 0):
+		mod_log(str("ModLoader: ERROR - ", mod_id, " ", missing_fields, " are required in _meta.json."))
+		# Flag mod - so it's not loaded later
+		mod.is_loadable = false
+		# Continue with the next mod
+		return
+	
+	# Add the meta data to the mod
+	mod.meta_data = meta_data
+
+# Make sure the meta file has all required fields
+func _check_meta_file(meta_data):
+	var missing_fields = REQUIRED_META_TAGS
+
+	for key in meta_data:
+		if(REQUIRED_META_TAGS.has(key)):
+			# remove the entry from missing fields if it is there
+			missing_fields.erase(key)
+
+	return missing_fields
+
+# Check if dependencies are there
+func _check_dependencies(mod_id:String, deps:Array):
+	mod_log(str("ModLoader: Checking dependencies - mod_id: ", mod_id, " dependencies: ", deps))
+	# Init importance score for every mod
+	if(!mod_data[mod_id].meta_data.has("importance")):
+		mod_data[mod_id].meta_data.importance = 0
+	
+	# loop through each dependency
+	for dependency_id in deps:
+		var dependency_meta_data = mod_data[dependency_id].meta_data
+
+		# Init the importance score if it's missing
+		if(!dependency_meta_data.has("importance")):
+			dependency_meta_data.importance = 0
+		
+		# check if dependency is missing
+		if(!mod_data.has(dependency_id)):
+			_handle_missing_dependency(mod_id, dependency_id)
+			continue
+		
+		# increase importance score by 1
+		dependency_meta_data.importance = dependency_meta_data.importance + 1
+		mod_log(str("ModLoader: Dependency -> ", dependency_id, " importance -> ", dependency_meta_data.importance))
+		
+		# check if dependency has dependencies
+		if(dependency_meta_data.dependencies.size() > 0):
+			_check_dependencies(dependency_id, dependency_meta_data.dependencies)
+
+func _handle_missing_dependency(mod_id, dependency_id):
+	mod_log(str("ModLoader: Handling missing dependency - mod_id -> ", mod_id, " dependency_id -> ", dependency_id))
+	# if mod is not present in the missing dependencies array
+	if(!mod_missing_dependencies.has(mod_id)):
+		# add it
+		mod_missing_dependencies[mod_id] = []
+	
+	mod_missing_dependencies[mod_id].append(dependency_id)
+	# Flag the mod so it's not loaded later
+	mod_data[mod_id].is_loadable = false
+
+func _get_load_order():
+	var mod_data_array = mod_data.values()
+
+	# Add loadable mods to the mod load order array
+	for mod in mod_data_array:
+		if(mod.is_loadable):
+			mod_load_order.append(mod)
+	
+	# Sort mods by the importance value
+	mod_load_order.sort_custom(self, "_compare_Importance")
+
+func _compare_Importance(a, b):
+	# if true a -> b
+	# if false b -> a
+	if(a.meta_data.importance > b.meta_data.importance):
+		return true
+	else:
+		return false
+
+func _init_mod(mod):
+		var mod_main_path = mod.required_files_path.modmain
+		var mod_main_global_path = str("res://", mod_main_path)
+		mod_log(str("ModLoader: Loading script from -> ", mod_main_global_path))
+		var mod_main_script = ResourceLoader.load(mod_main_global_path)
+		mod_log(str("ModLoader: Loaded script -> ", mod_main_script))
+		var mod_main_instance = mod_main_script.new(self)
+		mod_main_instance.name = mod.meta_data.id
+		mod_log(str("modLoader: Adding child -> ", mod_main_instance))
+		add_child(mod_main_instance, true)
+
+
+
+#####################################################
+################# MOD LOADER UTILS ##################
+##################################################### 
+
+# Util functions used in the mod loading process
+
+func _get_mod_folder_dir():
 	var gameInstallDirectory = OS.get_executable_path().get_base_dir()
 	mod_log(str("gameInstallDirectory: ", gameInstallDirectory))
 	if OS.get_name() == "OSX":
 		gameInstallDirectory = gameInstallDirectory.get_base_dir().get_base_dir().get_base_dir()
-	var modPathPrefix = gameInstallDirectory.plus_file("mods")
+	
+	return gameInstallDirectory.plus_file("mods")
 
-	var dir = Directory.new()
-	if dir.open(modPathPrefix) != OK:
-		mod_log("ModLoader: Can't open mod folder %s." % modPathPrefix)
-		return
-	if dir.list_dir_begin() != OK:
-		mod_log("ModLoader: Can't read mod folder %s." % modPathPrefix)
-		return
+# Parses JSON from a given file path and returns a dictionary
+func _get_json_as_dict(path):
+	# mod_log(str("ModLoader: getting JSON as dict from path -> ", path))
+	var file = File.new()
+	file.open(path, File.READ)
+	var content = file.get_as_text()
 
-	while true:
-		var fileName = dir.get_next()
-		if fileName == '':
-			break
-		if dir.current_is_dir():
-			continue
-		var modFSPath = modPathPrefix.plus_file(fileName)
-		var modGlobalPath = ProjectSettings.globalize_path(modFSPath)
-		if !ProjectSettings.load_resource_pack(modGlobalPath, true):
-			mod_log("ModLoader: %s failed to load." % fileName)
-			continue
-		_modZipFiles.append(modFSPath)
-		mod_log("ModLoader: %s loaded." % fileName)
-	dir.list_dir_end()
+	return JSON.parse(content).result
 
-
-# Load and run any ModMain.gd scripts which were present in mod ZIP files.
-# Attach the script instances to this singleton's scene to keep them alive.
-func _initMods():
-	var initScripts = []
-	for modFSPath in _modZipFiles:
-		var gdunzip = load('res://vendor/gdunzip.gd').new()
-		gdunzip.load(modFSPath)
-		for modEntryPath in gdunzip.files:
-			var modEntryName = modEntryPath.get_file().to_lower()
-			if modEntryName.begins_with('modmain') and modEntryName.ends_with('.gd'):
-				var modGlobalPath = "res://" + modEntryPath
-				mod_log("ModLoader: Loading %s" % modGlobalPath)
-				var packedScript = ResourceLoader.load(modGlobalPath)
-				initScripts.append(packedScript)
-
-	initScripts.sort_custom(self, "_compareScriptPriority")
-
-	for packedScript in initScripts:
-		mod_log("ModLoader: Running %s" % packedScript.resource_path)
-		var scriptInstance = packedScript.new(self)
-		scriptInstance.name = packedScript.resource_path.split('/')[2]
-		add_child(scriptInstance, true)
+func _get_file_name(path, is_lower_case = true, is_no_extension = false):	
+	# mod_log(str("ModLoader: Get file name from path -> ", path))
+	var file_name = path.get_file()
+	
+	if(is_lower_case):
+		# mod_log(str("ModLoader: Get file name in lower case"))
+		file_name = file_name.to_lower()
+	
+	if(is_no_extension):
+		# mod_log(str("ModLoader: Get file name without extension"))
+		var file_extension = file_name.get_extension()
+		file_name = file_name.replace(str(".",file_extension), '')
+	
+	# mod_log(str("ModLoader: return file name -> ", file_name))
+	return file_name
 
 
-func _compareScriptPriority(a, b):
-	var aPrio = a.get_script_constant_map().get("MOD_PRIORITY", 0)
-	var bPrio = b.get_script_constant_map().get("MOD_PRIORITY", 0)
-	if aPrio != bPrio:
-		return aPrio < bPrio
 
-	# Ensure that the result is deterministic, even when the priority is the same
-	var aPath = a.resource_path
-	var bPath = b.resource_path
-	if aPath != bPath:
-		return aPath < bPath
+#####################################################
+################## MODDING HELPERS ##################
+##################################################### 
 
-	return false
-
+# Helper functions to build mods
 
 func installScriptExtension(childScriptPath:String):
 	var childScript = ResourceLoader.load(childScriptPath)
