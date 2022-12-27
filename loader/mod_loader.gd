@@ -3,6 +3,7 @@
 # Written in 2021 by harrygiel <harrygiel@gmail.com>,
 # in 2021 by Mariusz Chwalba <mariusz@chwalba.net>,
 # in 2022 by Vladimir Panteleev <git@cy.md>
+# in 2023 by KANA <kai@kana.jetzt>
 #
 # To the extent possible under law, the author(s) have
 # dedicated all copyright and related and neighboring
@@ -37,11 +38,12 @@ var mod_missing_dependencies = {}
 
 func _init():
 	# if mods are not enabled - don't load mods
-	if(!_check_mods_enabled()):
+	if(!_check_cmd_line_arg("--enable-mods")):
 		return
 
 	_get_mod_zip_file_paths()
 	_unzip_mods()
+	mod_log("ModLoader: Unziped all Mods")
 
 	for mod_id in mod_data:
 		var mod = mod_data[mod_id]
@@ -63,7 +65,7 @@ func _init():
 	# Sort mod_load_order by the importance score of the mod
 	_get_load_order()
 	
-	mod_log(str("ModLoader: mod_load_order -> ", JSON.print(mod_load_order, '   ')))
+	dev_log(str("ModLoader: mod_load_order -> ", JSON.print(mod_load_order, '   ')))
 
 	# Instance every mod and add it as a node to the Mod Loader
 	for mod in mod_load_order:
@@ -71,9 +73,13 @@ func _init():
 		_init_mod(mod)
 
 
-	mod_log(str("ModLoader: mod_data: ", JSON.print(mod_data, '   ')))
+	dev_log(str("ModLoader: mod_data: ", JSON.print(mod_data, '   ')))
 
-func mod_log(text:String, pretty:bool = false)->void :
+func dev_log(text:String, pretty:bool = false):
+	if(_check_cmd_line_arg("--mod-dev")):
+		mod_log(text, pretty)
+
+func mod_log(text:String, pretty:bool = false)->void:
 	var date_time = Time.get_datetime_dict_from_system()
 	var date_time_string = str(date_time.day,'.',date_time.month,'.',date_time.year,' - ', date_time.hour,':',date_time.minute,':',date_time.second)
 	
@@ -96,13 +102,6 @@ func mod_log(text:String, pretty:bool = false)->void :
 	else:
 		log_file.store_string("\n" + str(date_time_string,'   ', text))
 	log_file.close()
-
-func _check_mods_enabled() -> bool:
-	for arg in OS.get_cmdline_args():
-		if arg == "--enable-mods":
-			return true
-
-	return false
 
 func _get_mod_zip_file_paths():
 	# Path to the games mod folder
@@ -132,7 +131,7 @@ func _get_mod_zip_file_paths():
 		mod_log("ModLoader: %s loaded." % mod_folder_name)
 	dir.list_dir_end()
 
-	mod_log(str("ModLoader: Zip File Paths: ", mod_zip_file_paths))
+	dev_log(str("ModLoader: Zip File Paths: ", mod_zip_file_paths))
 
 func _unzip_mods():
 	# Unzip each mod zip file
@@ -153,8 +152,6 @@ func _unzip_mods():
 		for file in gdunzip.files:
 			if(file.get_file() != ''):
 				mod_data[mod_id].file_paths.append(file)
-	
-	mod_log("ModLoader: Unziped all Mods")
 
 # Make sure the required mod files are there
 func _check_mod_files(mod_id):
@@ -183,7 +180,7 @@ func _check_mod_files(mod_id):
 			mod.required_files_path[_get_file_name(file_path, true, true)] = file_path
 	
 	if(REQUIRED_MOD_FILES.size() == found_files.size()):
-		mod_log(str("ModLoader: ", mod_id, " all required Files found."))
+		dev_log(str("ModLoader: ", mod_id, " all required Files found."))
 	else:
 		# Don't show this error if the "required file not in root" error is shown before
 		if(!mod.has("is_loadable") || mod.is_loadable):
@@ -209,7 +206,7 @@ func _load_meta_data(mod_id):
 	var meta_path = str("res://",mod_id,"/_meta.json")
 	var meta_data = _get_json_as_dict(meta_path)
 
-	mod_log(str("ModLoader: loaded meta data -> ", meta_data))
+	dev_log(str("ModLoader: ", mod_id, " loaded meta data -> ", meta_data))
 
 	# Check if the meta data has all required fields
 	var missing_fields = _check_meta_file(meta_data)
@@ -236,18 +233,14 @@ func _check_meta_file(meta_data):
 
 # Check if dependencies are there
 func _check_dependencies(mod_id:String, deps:Array):
-	mod_log(str("ModLoader: Checking dependencies - mod_id: ", mod_id, " dependencies: ", deps))
-	# Init importance score for every mod
-	if(!mod_data[mod_id].meta_data.has("importance")):
-		mod_data[mod_id].meta_data.importance = 0
+	dev_log(str("ModLoader: Checking dependencies - mod_id: ", mod_id, " dependencies: ", deps))	
 	
 	# loop through each dependency
 	for dependency_id in deps:
+		var dependency = mod_data[dependency_id]
 		var dependency_meta_data = mod_data[dependency_id].meta_data
 
 		# Init the importance score if it's missing
-		if(!dependency_meta_data.has("importance")):
-			dependency_meta_data.importance = 0
 		
 		# check if dependency is missing
 		if(!mod_data.has(dependency_id)):
@@ -255,15 +248,15 @@ func _check_dependencies(mod_id:String, deps:Array):
 			continue
 		
 		# increase importance score by 1
-		dependency_meta_data.importance = dependency_meta_data.importance + 1
-		mod_log(str("ModLoader: Dependency -> ", dependency_id, " importance -> ", dependency_meta_data.importance))
+		dependency.importance = dependency.importance + 1
+		dev_log(str("ModLoader: Dependency -> ", dependency_id, " importance -> ", dependency.importance))
 		
 		# check if dependency has dependencies
 		if(dependency_meta_data.dependencies.size() > 0):
 			_check_dependencies(dependency_id, dependency_meta_data.dependencies)
 
 func _handle_missing_dependency(mod_id, dependency_id):
-	mod_log(str("ModLoader: Handling missing dependency - mod_id -> ", mod_id, " dependency_id -> ", dependency_id))
+	mod_log(str("ModLoader: ERROR - missing dependency - mod_id -> ", mod_id, " dependency_id -> ", dependency_id))
 	# if mod is not present in the missing dependencies array
 	if(!mod_missing_dependencies.has(mod_id)):
 		# add it
@@ -287,7 +280,7 @@ func _get_load_order():
 func _compare_Importance(a, b):
 	# if true a -> b
 	# if false b -> a
-	if(a.meta_data.importance > b.meta_data.importance):
+	if(a.importance > b.importance):
 		return true
 	else:
 		return false
@@ -295,12 +288,12 @@ func _compare_Importance(a, b):
 func _init_mod(mod):
 		var mod_main_path = mod.required_files_path.modmain
 		var mod_main_global_path = str("res://", mod_main_path)
-		mod_log(str("ModLoader: Loading script from -> ", mod_main_global_path))
+		dev_log(str("ModLoader: Loading script from -> ", mod_main_global_path))
 		var mod_main_script = ResourceLoader.load(mod_main_global_path)
-		mod_log(str("ModLoader: Loaded script -> ", mod_main_script))
+		dev_log(str("ModLoader: Loaded script -> ", mod_main_script))
 		var mod_main_instance = mod_main_script.new(self)
 		mod_main_instance.name = mod.meta_data.id
-		mod_log(str("modLoader: Adding child -> ", mod_main_instance))
+		dev_log(str("modLoader: Adding child -> ", mod_main_instance))
 		add_child(mod_main_instance, true)
 
 
@@ -310,6 +303,13 @@ func _init_mod(mod):
 ##################################################### 
 
 # Util functions used in the mod loading process
+
+func _check_cmd_line_arg(argument) -> bool:
+	for arg in OS.get_cmdline_args():
+		if arg == argument:
+			return true
+
+	return false
 
 func _get_mod_folder_dir():
 	var gameInstallDirectory = OS.get_executable_path().get_base_dir()
@@ -371,43 +371,9 @@ func installScriptExtension(childScriptPath:String):
 
 
 func addTranslationFromResource(resourcePath: String):
-	mod_log("ModLoader: Adding Translation from Resource")
 	var translation_object = load(resourcePath)
 	TranslationServer.add_translation(translation_object)
 	mod_log("ModLoader: Added Translation from Resource")
-
-func addTranslationsFromCSV(csvPath: String):
-	mod_log(str("ModLoader: adding translations from CSV -> ", csvPath))
-	var translationCsv = File.new()
-	translationCsv.open(csvPath, File.READ)
-	var TranslationParsedCsv = {}
-
-	var translations = []
-
-	# Load the header line
-	var csvLine = translationCsv.get_csv_line()
-	for i in range(1, csvLine.size()):
-		var translationObject = Translation.new()
-		translationObject.locale = csvLine[i]
-		translations.append(translationObject)
-
-	# Load translations
-	while !translationCsv.eof_reached():
-		csvLine = translationCsv.get_csv_line()
-		if csvLine.size() == 1 and csvLine[0] == "":
-			break  # Work around weird race condition in Godot leading to infinite loop
-		var translationID = csvLine[0]
-		for i in range(1, csvLine.size()):
-			translations[i - 1].add_message(translationID, csvLine[i])
-
-	translationCsv.close()
-
-	# Install the translation objects
-	for translationObject in translations:
-		TranslationServer.add_translation(translationObject)
-	
-	mod_log(str("ModLoader: added translations from CSV -> ", csvPath))
-
 
 func appendNodeInScene(modifiedScene, nodeName:String = "", nodeParent = null, instancePath:String = "", isVisible:bool = true):
 	var newNode
@@ -433,7 +399,7 @@ var _savedObjects = []
 func saveScene(modifiedScene, scenePath:String):
 	var packed_scene = PackedScene.new()
 	packed_scene.pack(modifiedScene)
-	mod_log(str("ModLoader: packing scene -> ", packed_scene))
+	dev_log(str("ModLoader: packing scene -> ", packed_scene))
 	packed_scene.take_over_path(scenePath)
-	mod_log(str("ModLoader: saveScene - taking over path - new path -> ", packed_scene.resource_path))
+	dev_log(str("ModLoader: saveScene - taking over path - new path -> ", packed_scene.resource_path))
 	_savedObjects.append(packed_scene)
