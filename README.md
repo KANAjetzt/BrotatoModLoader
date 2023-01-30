@@ -1,11 +1,8 @@
-# BrotatoModLoader
+# Moved to https://github.com/BrotatoMods/Brotato-ModLoader
 
-A Mod Loader for the Game Brotato
 
-# 🔥 Basically the Delta-V Mod Loader - Thanks! 🔥
-
-[Delta-V-Modding](https://gitlab.com/Delta-V-Modding/Mods)
-
-# ⚙ I also included the gdunzip dependency here - Thanks jelle! ⚙
-
-[gdunzip](https://git.sr.ht/~jelle/gdunzip)
+<p align="center">
+  <a href="https://github.com/BrotatoMods/Brotato-ModLoader">
+    <img alt="Gatsby" src="https://avatars.githubusercontent.com/u/120222733?s=200&v=4" />
+  </a>
+</p>
